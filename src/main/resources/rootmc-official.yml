@@ -1,0 +1,46 @@
+# RootMC-Official — plugins/RootMC/rootmc-official.yml
+# Install on BOTH Towny and Claims. Each peer: block points at the other host's MySQL.
+# Does NOT sync economy, shops, loans, homes, or inventories.
+# Peer path is host-to-host MySQL — independent of Cloudflare / desktop edge.
+#
+# If both servers' mcMMO plugins already share one MySQL (typical: Towny DB),
+# keep sync.datasets.mcmmo: false — Official would only mirror into RootMC database.yml.
+
+enabled: false
+role: towny
+
+peer:
+  host: ""
+  port: 3306
+  database: ""
+  username: ""
+  password: ""
+  table-prefix: "root_"
+  jdbc-params: "verifyServerCertificate=false&useSSL=false&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=utf-8&serverTimezone=UTC"
+  mcmmo-table-prefix: "mcmmo_"
+
+sync:
+  interval-seconds: 15
+  on-join: true
+  datasets:
+    playtime: true
+    votes: true
+    reward-claims: true
+    mcmmo: false
+    perms-network: true
+    activity: true
+    cmdtest: true
+    link-cache: true
+
+# Must match Root-Times tables.playtime (prefix + name → root_rootmc_playtime).
+tables:
+  playtime: rootmc_playtime
+  playtime-monthly: rootmc_playtime_monthly
+
+server-log-sync:
+  enabled: false
+  # Prefer discord.channels.server-logs in cloud.yml; set here to override.
+  channel-id: ""
+  interval-minutes: 60
+  # Optional short label in message body (e.g. T, C, Towny, Claims).
+  server-tag: ""

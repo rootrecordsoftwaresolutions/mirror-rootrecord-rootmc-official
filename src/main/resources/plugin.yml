@@ -1,0 +1,18 @@
+name: RootMC-Official
+version: '${version}'
+main: com.rootrecord.minecraft.rootmcofficial.RootMcOfficialPlugin
+api-version: '26.1'
+description: Official Towny↔Claims progression link — playtime, mcMMO, votes, perms network (not economy).
+author: RootMC
+website: https://rootmc.net/plugins/rootmc-official/
+softdepend: [Root-Core]
+commands:
+  rootmcofficial:
+    description: Official peer sync status
+    usage: /<command> [status|sync]
+    aliases: [rmcofficial, official]
+    permission: rootmcofficial.admin
+permissions:
+  rootmcofficial.admin:
+    description: Administer RootMC-Official peer sync
+    default: op
