@@ -16,7 +16,8 @@
 | API | https://api.rootmc.net |
 | Discord | https://discord.gg/rFFQYrNaqS |
 | GitHub (this repo) | https://github.com/RootRecord/rootmc-official |
-| Releases | https://github.com/RootRecord/rootmc-official/releases |
+| Releases (version notes) | https://github.com/RootRecord/rootmc-official/releases |
+| BuiltByBit (paid jars) | https://builtbybit.com/ (listing coming soon) |
 
 **Discord:** RootMC community - join for support, announcements, and governance: https://discord.gg/rFFQYrNaqS
 
