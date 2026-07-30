@@ -1,5 +1,6 @@
 package com.rootrecord.minecraft.rootmcofficial;
 
+import com.rootrecord.minecraft.common.RootDiscordSupport;
 import com.rootrecord.minecraft.common.RootRecordFolders;
 import com.rootrecord.minecraft.common.config.RootMcDatabaseConfig;
 import com.rootrecord.minecraft.common.config.RootRecordYamlConfig;
@@ -52,6 +53,7 @@ public final class RootMcOfficialPlugin extends JavaPlugin {
             getLogger().info("RootMC-Official disabled (rootmc-official.yml enabled: false).");
             return;
         }
+        RootDiscordSupport.warnIfMissing(this, "hourly server-log upload");
         hourlyLogRelay = new OfficialHourlyLogRelay(this);
         hourlyLogRelay.reload(yaml.config());
         if (!config.ready()) {

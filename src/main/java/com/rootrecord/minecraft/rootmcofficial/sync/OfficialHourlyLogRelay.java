@@ -1,15 +1,13 @@
 package com.rootrecord.minecraft.rootmcofficial.sync;
 
+import com.rootrecord.minecraft.common.RootDiscordApi;
 import com.rootrecord.minecraft.common.RootRecordFolders;
-import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
-import net.dv8tion.jda.api.utils.FileUpload;
+import com.rootrecord.minecraft.common.ShadedServiceBridge;
+import com.rootrecord.minecraft.common.config.RootMcDiscordConfig;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -25,12 +23,17 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-/** Captures server logs continuously and uploads one file per hour to Discord. */
+/**
+ * Captures server logs continuously and uploads one file per hour via Root-Discord.
+ * Gated by {@code server-log-sync.enabled} (default true).
+ */
 public final class OfficialHourlyLogRelay {
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
     private static final DateTimeFormatter FILE_TS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
             .withZone(ZoneOffset.UTC);
+    /** Discord attachment soft limit — keep under ~8 MiB. */
+    private static final long MAX_UPLOAD_BYTES = 7L * 1024L * 1024L;
 
     private final JavaPlugin plugin;
     private final Object fileLock = new Object();
@@ -39,7 +42,6 @@ public final class OfficialHourlyLogRelay {
     private Path activeLogPath;
     private BukkitTask uploadTask;
     private Handler handler;
-    private JDA jda;
 
     public OfficialHourlyLogRelay(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -49,12 +51,7 @@ public final class OfficialHourlyLogRelay {
         stop();
         this.config = RelayConfig.from(plugin, cfg);
         if (!config.enabled) {
-            plugin.getLogger().info("RootMC-Official hourly log relay disabled.");
-            return;
-        }
-        if (config.botToken.isBlank() || config.guildId.isBlank() || config.channelId.isBlank()) {
-            plugin.getLogger().warning(
-                    "RootMC-Official hourly log relay missing bot-token/guild-id/channel-id; check plugins/RootMC/cloud.yml discord.* (and optional server-log-sync.channel-id).");
+            plugin.getLogger().info("RootMC-Official hourly Discord log relay disabled (server-log-sync.enabled: false).");
             return;
         }
         try {
@@ -63,19 +60,39 @@ public final class OfficialHourlyLogRelay {
             Files.createDirectories(activeLogPath.getParent());
             Files.writeString(activeLogPath, "", StandardCharsets.UTF_8);
 
+            warnBootPrereqs();
+
             attachHandler();
-            jda = JDABuilder.createDefault(config.botToken).build().awaitReady();
+            long delayTicks = config.intervalMinutes * 60L * 20L;
             uploadTask = plugin.getServer().getScheduler().runTaskTimerAsynchronously(
                     plugin,
                     this::uploadAndRotateSafe,
-                    config.intervalMinutes * 60L * 20L,
-                    config.intervalMinutes * 60L * 20L);
+                    delayTicks,
+                    delayTicks);
             plugin.getLogger().info(
-                    "RootMC-Official hourly log relay enabled → channel "
-                            + config.channelId + " every " + config.intervalMinutes + "m.");
+                    "RootMC-Official hourly Discord log relay enabled every " + config.intervalMinutes
+                            + "m (uploads via Root-Discord → cloud.yml discord.channels.server-logs).");
         } catch (Exception ex) {
             plugin.getLogger().log(Level.WARNING, "Failed to start RootMC-Official hourly log relay.", ex);
             stop();
+        }
+    }
+
+    private void warnBootPrereqs() {
+        RootDiscordApi discord = ShadedServiceBridge.resolveDiscord(plugin);
+        if (discord == null) {
+            plugin.getLogger().warning(
+                    "Hourly log relay is ENABLED but Root-Discord is not installed — uploads will fail until Root-Discord is present.");
+            return;
+        }
+        if (!discord.isReady()) {
+            plugin.getLogger().warning(
+                    "Hourly log relay is ENABLED but Root-Discord is not ready yet (check cloud.yml discord.bot-token / guild-id).");
+        }
+        RootMcDiscordConfig.DiscordSettings settings = RootMcDiscordConfig.resolve(plugin);
+        if (settings == null || settings.serverLogsChannelId() == null || settings.serverLogsChannelId().isBlank()) {
+            plugin.getLogger().warning(
+                    "Hourly log relay is ENABLED but discord.channels.server-logs is blank in plugins/RootMC/cloud.yml — uploads will be skipped.");
         }
     }
 
@@ -87,10 +104,6 @@ public final class OfficialHourlyLogRelay {
         if (handler != null) {
             Logger.getLogger("").removeHandler(handler);
             handler = null;
-        }
-        if (jda != null) {
-            jda.shutdownNow();
-            jda = null;
         }
     }
 
@@ -131,39 +144,47 @@ public final class OfficialHourlyLogRelay {
     }
 
     private void uploadAndRotate() throws IOException {
-        if (jda == null || activeLogPath == null) {
+        if (activeLogPath == null) {
             return;
         }
-        TextChannel channel = jda.getTextChannelById(config.channelId);
-        if (channel == null || !channel.getGuild().getId().equals(config.guildId)) {
-            plugin.getLogger().warning("Hourly log relay channel/guild mismatch; skipping upload.");
+        RootDiscordApi discord = ShadedServiceBridge.resolveDiscord(plugin);
+        if (discord == null) {
+            plugin.getLogger().warning(
+                    "Hourly log upload skipped: Root-Discord not installed (server-log-sync.enabled is true).");
+            return;
+        }
+        if (!discord.isReady()) {
+            plugin.getLogger().warning(
+                    "Hourly log upload skipped: Root-Discord not ready (bot-token / guild / login).");
             return;
         }
 
         Path batchFile;
         synchronized (fileLock) {
             if (!Files.exists(activeLogPath) || Files.size(activeLogPath) <= 0L) {
+                plugin.getLogger().info("Hourly log upload skipped: no lines captured this interval.");
                 return;
             }
+            long size = Files.size(activeLogPath);
             batchFile = activeLogPath.resolveSibling("rootmc-server-log-" + FILE_TS.format(Instant.now()) + ".log");
-            Files.move(activeLogPath, batchFile, StandardCopyOption.REPLACE_EXISTING);
+            if (size > MAX_UPLOAD_BYTES) {
+                // Keep only the last MAX_UPLOAD_BYTES for Discord attachment limits.
+                byte[] all = Files.readAllBytes(activeLogPath);
+                int start = (int) (all.length - MAX_UPLOAD_BYTES);
+                Files.write(batchFile, java.util.Arrays.copyOfRange(all, start, all.length));
+                plugin.getLogger().warning(
+                        "Hourly log batch truncated to last " + MAX_UPLOAD_BYTES
+                                + " bytes for Discord upload (was " + size + ").");
+            } else {
+                Files.move(activeLogPath, batchFile, StandardCopyOption.REPLACE_EXISTING);
+            }
             Files.writeString(activeLogPath, "", StandardCharsets.UTF_8);
         }
 
         String label = config.serverTag.isBlank() ? "RootMC" : config.serverTag;
         String content = "[" + label + "] server logs for the last hour";
-        channel.sendMessage(content)
-                .addFiles(FileUpload.fromData(batchFile.toFile()))
-                .queue(
-                        ok -> {
-                            try {
-                                Files.deleteIfExists(batchFile);
-                            } catch (IOException ignored) {
-                                // keep if delete fails
-                            }
-                        },
-                        err -> plugin.getLogger().warning(
-                                "Failed to send hourly log file to Discord: " + err.getMessage()));
+        discord.uploadServerLog(batchFile.toFile(), content);
+        plugin.getLogger().info("Hourly log batch queued to Discord (" + batchFile.getFileName() + ").");
     }
 
     private String formatRecord(LogRecord record) {
@@ -193,27 +214,17 @@ public final class OfficialHourlyLogRelay {
         }
     }
 
-    private record RelayConfig(
-            boolean enabled,
-            int intervalMinutes,
-            String channelId,
-            String serverTag,
-            String botToken,
-            String guildId) {
+    private record RelayConfig(boolean enabled, int intervalMinutes, String serverTag) {
         static RelayConfig from(JavaPlugin plugin, FileConfiguration cfg) {
-            com.rootrecord.minecraft.common.config.RootMcDiscordConfig.DiscordSettings discord =
-                    com.rootrecord.minecraft.common.config.RootMcDiscordConfig.resolve(plugin);
-            String fromOfficial = cfg.getString("server-log-sync.channel-id", "");
-            String channelId = fromOfficial != null && !fromOfficial.isBlank()
-                    ? fromOfficial.trim()
-                    : discord.serverLogsChannelId();
+            String tag = cfg.getString("server-log-sync.server-tag", "");
+            if (tag == null) {
+                tag = "";
+            }
+            tag = tag.trim();
             return new RelayConfig(
-                    cfg.getBoolean("server-log-sync.enabled", false),
+                    cfg.getBoolean("server-log-sync.enabled", true),
                     Math.max(1, cfg.getInt("server-log-sync.interval-minutes", 60)),
-                    channelId,
-                    cfg.getString("server-log-sync.server-tag", "").trim(),
-                    discord.botToken(),
-                    discord.guildId());
+                    tag);
         }
     }
 }

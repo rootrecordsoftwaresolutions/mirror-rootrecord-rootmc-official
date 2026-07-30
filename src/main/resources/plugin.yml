@@ -5,7 +5,7 @@ api-version: '26.1'
 description: Official Towny↔Claims progression link — playtime, mcMMO, votes, perms network (not economy).
 author: RootMC
 website: https://rootmc.net/plugins/rootmc-official/
-softdepend: [Root-Core]
+softdepend: [Root-Core, Root-Discord]
 commands:
   rootmcofficial:
     description: Official peer sync status

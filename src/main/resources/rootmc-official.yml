@@ -38,7 +38,8 @@ tables:
   playtime-monthly: rootmc_playtime_monthly
 
 server-log-sync:
-  enabled: false
+  # Feature toggle: hourly JUL capture → Root-Discord → cloud.yml discord.channels.server-logs
+  enabled: true
   # Prefer discord.channels.server-logs in cloud.yml; set here to override.
   channel-id: ""
   interval-minutes: 60
